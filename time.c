@@ -85,7 +85,8 @@ static int adjust(int * x, int y, int * z)
 void time2tm(time_t inTime, tm_t *tm)		/*- mm 000127 -*/
 {
     unsigned long	months, days, seconds;
-    int				years, is_leap_year;
+    int				years;
+    unsigned int is_leap_year;
 
     /* Since time_t is relative to 1970 rather than 1900,
      * This must be of type unsigned long rather than a signed
@@ -148,14 +149,14 @@ void time2tm(time_t inTime, tm_t *tm)		/*- mm 000127 -*/
 uint32 tm2time(tm_t *tm)
 {
 	#define REFERENCE_YEAR 2000
-	long	days, days1;
+	long long days, days1;
 	uint32 seconds;
 
 	if (!tm)	return(0);
 	adjust(&tm->tm_sec,  60, &tm->tm_min);		// put sec  in range 0-59
 	adjust(&tm->tm_min,  60, &tm->tm_hour);		// put min  in range 0-59
 	adjust(&tm->tm_hour, 24, &tm->tm_mday);		// put hour in range 0-23
-	adjust(&tm->tm_mon,  12, &tm->tm_year);		// put mon  in range 0-11
+	adjust(&tm->tm_mon,  13, &tm->tm_year);		// put mon  in range 0-12
 	days = tm->tm_year;
 	days *= 365;								// convert year to days
 	days += leap_days(tm->tm_year, tm->tm_mon);	// add leap days

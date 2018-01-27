@@ -112,9 +112,6 @@ void main(void)
 		PrintDec1(ChargeCost);	// concatenates ChargeCost and ", " to the message string
         PrintTime((int)clock_Time.tm_hour, (int)clock_Time.tm_min, (int)clock_Time.tm_sec);
     	PrintDate((int)clock_Time.tm_mon, (int)clock_Time.tm_mday, (int)clock_Time.tm_year);
-    	strcat(message, " ");
-//    	PrintDec1(port3data);
-    	PrintDec1(GpsRxIndex);
         strcat(message, "\r\n");
 
     	PrintString(message);	// Output the message screen out the serial port
@@ -549,56 +546,6 @@ void PrintString(char * theString)
     // Uart1TxChar(theString[i]);
   }
 }
-
-// ********* parse_line **************************************** //
-static void parse_line()
-{
-    switch (minmea_sentence_id(line, false)) {
-        case MINMEA_SENTENCE_GGA: {
-            struct minmea_sentence_gga frame;
-            if (minmea_parse_gga(&frame, line)) {
-                if(frame.fix_quality > 0)  {
-                  lon = frame.longitude.value;
-                  lat = frame.latitude.value;
-                  altitude = (long)minmea_tofloat(&frame.altitude);
-                  height = (long)minmea_tofloat(&frame.height);
-                  if(frame.fix_quality > 0){
-                    printf("Fix: %d Sat: %d Time: %2d:%2d:%2d Long: %ld Lat: %ld Height: %ld Altitude: %ld Long: %f\r\n",
-                           frame.fix_quality, frame.satellites_tracked,
-                           frame.time.hours, frame.time.minutes, frame.time.seconds,
-                           lon, lat, height, altitude,
-                           minmea_tocoord(&frame.longitude));
-                  }
-//                  ctimer_stop(&nofix_timer);
-//                  shutDown(NULL);
-//                  notify_ready(NULL);
-                }
-                else printf("No fix - reset host\r\n");
-            }
-            break;
-        }
-        case MINMEA_SENTENCE_GLL:
-            break;
-        case MINMEA_SENTENCE_GST:
-            break;
-        case MINMEA_SENTENCE_GSV:
-            break;
-        case MINMEA_SENTENCE_GSA:
-            break;
-        case MINMEA_SENTENCE_RMC:
-            break;
-        case MINMEA_SENTENCE_VTG:
-            break;
-        case MINMEA_INVALID:
-            break;
-        case MINMEA_UNKNOWN:
-            break;
-        default:
-            PrintString("/r/nNo matching MINMEA case\r\n");
-            break;
-    }
-}
-
 
 // Record ADC12 A10 channel data and store in RAM using DMA0
 void Record(void)
