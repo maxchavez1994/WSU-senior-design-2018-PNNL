@@ -10,6 +10,7 @@
  *    http://www.ti.com/lit/ug/slau049f/slau049f.pdf
  *
  *      Revised: R. Pratt - 10/24/2017
+ *      Revised: D. Yruretagoyena - 4/22/2018
  */
 
 #include  <msp430x26x.h>
@@ -37,8 +38,9 @@ long RefineCrossing(volatile unsigned int voltage[Num_of_Results]);
 void SerialReply(char option);
 int  ServiceSerial(void);
 int  Uart1TxChar(uint8 c);
-int  voltConv(volatile unsigned int voltage[Num_of_Results]);
-long volt_zeroDetector(volatile unsigned int voltage[Num_of_Results]);
+void sample_ADC(struct Voltage *d);
+void volt_zeroDetector(struct Voltage *d);
+long period(struct Voltage d);
 
 #define AVG_INTERVAL   4    // 2^4
 
@@ -48,14 +50,14 @@ int RxWriteIndex = 0, RxReadIndex = 0;
 char TxBuffer[SER_BUFFER_SIZE], RxBuffer[SER_BUFFER_SIZE];
 int ISR_Flag = 0;
 
-tm_t clock_Time = {0, 0, 12, 7, 11, 2016, 1};   //(sec, min, hr, day, mon, year,0);
+tm_t clock_Time = {0, 0, 12, 22, 4, 2018, 1};   //(sec, min, hr, day, mon, year,0);
 
 volatile unsigned int buffer0[Num_of_Results];
 volatile unsigned int buffer1[Num_of_Results];
 
 char message[SER_BUFFER_SIZE];
 
-struct Voltage Volts = {0, 0, 0, 0, 0, 0, 0};
+
 
 #define DEBUG 0
 
@@ -68,46 +70,83 @@ struct Voltage Volts = {0, 0, 0, 0, 0, 0, 0};
 /****************************************************************************/
 void main(void)
 {
+  struct Voltage Volts = {0,0,0,0,0};
   int LoopCount = 0;
-  long Period = 830, PeriodAvg = (13280 << AVG_INTERVAL), ChargeCost = 0;
+  long Period = 910, tmpPeriod = 0, Period_ = 14560, PeriodAvg = (14560 << AVG_INTERVAL), ChargeCost = 0;
   int battCurrent = 0, battSOC = 20, TotWsec = 0;
-  int iVolts = 115, aVolts = (115 << AVG_INTERVAL), Watts = 3000, Phase  = 0;
+  int iVolts = 115, iVolts_ = 115, aVolts = (115 << AVG_INTERVAL), Watts = 3000, Phase  = 0;
+  int avgControl = 0;
+
+  int i = 0;
 
   InitSystem();
   InitUart();
   InitTimers();                 // Enable tic timer
 
-  while (1) {
+  while (1)
+  {
     __bis_SR_register(LPM0_bits + GIE);       // Enter LPM0 w/ interrupts
 
-    if (ISR_Flag & ISRFLG_USB_BIT)  {		// Process UART interrupt
+    if (ISR_Flag & ISRFLG_USB_BIT)
+    {		// Process UART interrupt
       ISR_Flag &= ~ISRFLG_USB_BIT;
       ServiceSerial();
     }
-    if (ISR_Flag & ISRFLG_TWOHZ) {			// Increment LoopCount
+    if (ISR_Flag & ISRFLG_TWOHZ)
+    {			// Increment LoopCount
       LoopCount++;
       ISR_Flag &= ~ISRFLG_TWOHZ;
     }
-    if (ISR_Flag & ISRFLG_DMA_BIT) {
+    if (ISR_Flag & ISRFLG_DMA_BIT)
+    {
         TACCTL0 &= ~CCIE;
         ADC12CTL0 &= ~ENC;
-        iVolts = voltConv(buffer0);  // determines the max, min, delta, and mid voltage value
-        Period = PeriodAvg >> AVG_INTERVAL;
-        PeriodAvg -= Period;
-    	volt_zeroDetector(buffer0);
-//		Period += RefineCrossing(buffer0);
-//		PeriodAvg += Period;
-//		RefineCrossing(buffer0);
+        sample_ADC(&Volts);
+        volt_zeroDetector(&Volts);
+        tmpPeriod = period(Volts); //this function also has a check for good period values - resets period to 0 if not
+        if (tmpPeriod >= 900) //checking for bad results again
+        {
+            avgControl++; //increment avgControl for finding the average next
+            Period = tmpPeriod;
+            Period_ += Period; //adding all known good periods together
+            iVolts = Volts.delta; //setting iVolts to a known good delta
+            iVolts_ += Volts.delta; //Add up delta values for averaging
+        }
+        if (avgControl == 16)
+        {
+            PeriodAvg = Period_ >> AVG_INTERVAL; //Divide Period_ by 16, to find the average period from the last 16 samples
+            aVolts = iVolts_ >> AVG_INTERVAL; //same as PeriodAvg
+            iVolts_ = 0;
+            Period_ = 0;
+        }
+
+
+
 #if DEBUG
-    	printf("mid: %d max: %d min: %d delta: %d Period: %ld AvgPeriod: %ld\r\n", Volts.mid, Volts.peak, Volts.min, Volts.delta, Period, PeriodAvg);
+
+        /*printf("min: %d\r\n", Volts.min);
+        printf("max: %d\r\n", Volts.max);
+        printf("mid: %d\r\n", Volts.mid);
+        printf("delta: %d\r\n", Volts.delta);
+        /*for (i = 0; i < 4; i++)
+        {
+            printf("ZeroTM[%d]: %ld\r\n", i, Volts.zero_tm[i]);
+        }*/
+        /*printf("period: %ld\r\n", Period);
+        printf("periodavg: %ld\r\n", PeriodAvg); */
+
+
+
 #else
-    	if (LoopCount++ > 20)  {
+    	if (LoopCount++ > 20 && avgControl == 16)
+    	{
     	    tm2time(&clock_Time);
 		
-//    	    printf("X= %ld, %ld, %d, %d, %d, %d.%d, %d.%d, %d, %d, %ld, ", Period, (PeriodAvg >> AVG_INTERVAL), battCurrent, battSOC, TotWsec, iVolts, 0, (aVolts >> AVG_INTERVAL), 0, Watts, Phase, ChargeCost);
-            printf("X= %ld, %ld, %d, %d, %d, %d.%d, %d.%d, %d, %d, %ld, ", PeriodAvg, PeriodAvg, battCurrent, battSOC, TotWsec, iVolts, 0, (aVolts >> AVG_INTERVAL), 0, Watts, Phase, ChargeCost);
+    	    //printf("X= %ld, %ld, %d, %d, %d, %d.%d, %d.%d, %d, %d, %ld, ", Period, (PeriodAvg >> AVG_INTERVAL), battCurrent, battSOC, TotWsec, iVolts, 0, (aVolts >> AVG_INTERVAL), 0, Watts, Phase, ChargeCost);
+            printf("X= %ld, %ld, %d, %d, %d, %d.%d, %d.%d, %d, %d, %ld, ", Period, PeriodAvg, battCurrent, battSOC, TotWsec, iVolts, 0, aVolts, 0, Watts, Phase, ChargeCost);
       	    printf("%02d:%02d:%02d %02d/%02d/%02d\r\n", (int)clock_Time.tm_hour, (int)clock_Time.tm_min, (int)clock_Time.tm_sec, (int)clock_Time.tm_mon, (int)clock_Time.tm_mday, (int)clock_Time.tm_year);
       	    LoopCount = 0;
+      	    avgControl = 0;
     	}
 #endif
         ISR_Flag &= ~ISRFLG_DMA_BIT;
@@ -116,160 +155,98 @@ void main(void)
 		clock_Time.tm_sec += 1;
         //    }
 
-//    if (LoopCount == 70)
-//    {
-
-//        for (i = 0; i < Num_of_Results; i++)    {
-//            sprintf(message,"%u \r\n ", buffer0[i]);               // Print out our Max value across Uart
-//            PrintString(message);
-//        }
-//sprintf(message, "************************\r\n");
-//PrintString(message);
     }
   }  // while(1)
 }  // main()
 
-/******************************* volt_zeroDetector ***************************/
-long volt_zeroDetector(volatile unsigned int voltage[Num_of_Results])
-{
-    long PeriodTime = 0;
-    int i, j = 0, state = 0, state_last = 0, diff1, diff2;
-
-    Volts.Time[0] = 0;
-
-    for (i = 1; i < Num_of_Results; i++)    {       // the first point always seems bad
-        if (voltage[i] > Volts.mid)       state = 1;	// set state = 1, positive
-        else if (voltage[i] < Volts.mid)  state = -1;	// set state = -1, negative
-        else if (voltage[i] == Volts.mid)  state = 0;	// set state = 0, when equal
-        if (i > 1)  {
-            if (state == 0)                 Volts.Time[j++] = i;
-            else if (state_last != state)   Volts.Time[j++] = i;	// look for state transitions, but don't know if prior point was closer
-        }
-        state_last = state;
-        if (j == 3) break;
-    }
-	for (j = 0; j < 3; j++)  {
-    	if (voltage[Volts.Time[j]-1] > Volts.mid) 	diff1 = voltage[Volts.Time[j]-1] - Volts.mid;
-    	else 										diff1 = Volts.mid - voltage[Volts.Time[j-1]];
-    	if (voltage[Volts.Time[j]] > Volts.mid) 	diff2 = voltage[Volts.Time[j]] - Volts.mid;
-    	else 										diff2 = Volts.mid - voltage[Volts.Time[j]];
- 		if (diff1 < diff2)  Volts.Time[j] -= 1;
-	}
-    PeriodTime = Volts.Time[2] - Volts.Time[0];
-    if (PeriodTime < 800) {		// debugging bad results
-        for (i = 0; i < Num_of_Results; i++)    printf("%u \r\n ", voltage[i]);               // Print out our Max value across Uart
-        printf(message, "************************\r\n");
-    }
-    return PeriodTime;
-}
-
-/********************************* RefineCrossing ****************************
-Description: Multi-step process to refine zero crossing.  Step 1: refine 
-zero crossing voltage (Volts.mid).  Step 2
-****************************************************************************/
-long RefineCrossing(volatile unsigned int voltage[Num_of_Results])
-{
-	long value1 = 0, value2 = 0;
-	int i, slope = 0, j = 0, min_value = -32767, max_value = 32767;
-	int Crossing[4], value, midV, Scaling;
-
-	// Use zero crossing values to refine peak, min, delta, and mid values
-	i = Volts.Time[1] - Volts.Time[0];		// first max / min
-	for (j = Volts.Time[i - 4]; j < Volts.Time[i + 4]; j++)  {
-		value1 += voltage[j];		// find the delta voltage at 8 points around each zero crossing
-	}
-	i = Volts.Time[2] - Volts.Time[1];		// second max / min
-	for (j = Volts.Time[i - 4]; j < Volts.Time[i + 4]; j++)  {
-		value2 += voltage[j];		// find the delta voltage at 8 points around each zero crossing
-	}
-	if (value1 > value2) {  // not sure if value1 is Volts.peak or Volts.min
-		Volts.peak = (int)value1;
-		Volts.min = (int)value2;
-		Volts.delta = value1 - value2;
-	}
-	else {
-		Volts.peak = (int)value2;
-		Volts.min = (int)value1;
-		Volts.delta = value2 - value1;
-	}
-	Volts.peak >>= 3;			// Averaged 8 values
-	Volts.min >>= 3;			// Averaged 8 values
-	Volts.delta >>= 3;			// Averaged 8 values
-	Volts.mid = (value1 + value2) >> 4;		// midpoint of 8 averaged values
-	midV = (value1 + value2) >> 3;
-	
-	// Find the closest point on the voltage curve to the zero crossing using new Volts.mid
-	j = Volts.Time[0];		// first zero crossing
-	for (j = Volts.Time[i - 4]; j < Volts.Time[i + 4]; j++)  {
-		value = (voltage[j] << 1) - midV;
-		if (value == 0)  {
-			Crossing[0] = (j << 5);
-			break;
-		}
-		else if ((value > 0) && (value < max_value)) 	{
-			max_value = value;
-			Crossing[0] = (j << 5);
-		}	
-		else if ((value < 0) && (value > min_value)) 	{
-			min_value = value;
-			Crossing[0] = (j << 5);
-		}	
-	}
-
-	
-	// Volts.mid is a refined zero crossing voltage.  Slope is 24x actual slope
-	// Algorithm minimizes the difference between measured voltages (voltage[j]) and
-	// the slope-based voltages to get better approximate the zero crossing time.
-	// If floats were used, the algorithm might be easier to follow
-	slope >>= 1;	// slope is 12x actual
-	j = Volts.Time[0];
-	Crossing[0] = (Volts.peak - Volts.min);
-	Crossing[1] = (voltage[j-2] << 1) - Crossing[0];  // Need to figure out if add slope to result or subtract result
-	Crossing[2] = (voltage[j] << 1) - Crossing[0];		// Ideally, this value should be zero
-	Crossing[3] = (voltage[j+2] << 1) - Crossing[0];
-	if (Crossing[1] > 0)	{  // A.C. wave is crossing the zero-axis from + to -
-		Scaling = (Crossing[2] - Crossing[1]) / (Crossing[3] - Crossing[1]);
-	}
-	else if (Crossing[3] > 0)	{  // A.C. wave is crossing the zero-axis from - to +
-		Scaling = (Crossing[2] - Crossing[3]) / (Crossing[3] - Crossing[1]);
-	}
-	
-	
-	return value1;
-}
+/**********************Sample_ADC********************************
+ Description: Obtains min, max, delta, # of max and min data to populate the Voltage struct,
+ which will then be used in the zero cross detector function.
+ */
 
 
-/***************************************************************************
-
-     Description: This function returns an rolling average value of the last
-     eight input signal values
-****************************************************************************/
-long averagePeriod(long AvgPeriod, long iPeriod)
-{
-    long calcAvg = AvgPeriod;
-
-    calcAvg -= (AvgPeriod >> AVG_INTERVAL);
-    calcAvg += iPeriod;
-    return calcAvg;
-}
-
-
-//***************************************************************************
-int voltConv(volatile unsigned int voltage[Num_of_Results])
+void sample_ADC(struct Voltage *d)
 {
     int i = 0;
 
-    Volts.peak = 0;
-	Volts.min = 32767;
 
-	for (i = 0; i < Num_of_Results; i++)  {
-		if (Volts.peak < voltage[i]) Volts.peak = voltage[i];
-		if (Volts.min > voltage[i]) Volts.min = voltage[i];
-	}
-	Volts.delta = Volts.peak - Volts.min;
-	Volts.mid = (Volts.delta >> 1) + Volts.min;
-	return Volts.delta;
+    d->min = 32767;
+    d->max = 0;
+
+    for (i = 0; i < Num_of_Results; i++)
+    {
+        if (buffer0[i] > d->max)
+        {
+            d->max = buffer0[i];
+
+        }
+        if (buffer0[i] < d->min)
+        {
+            d->min = buffer0[i];
+
+        }
+    }
+
+    d->delta = d->max - d->min;
+
+    d->mid = (d->delta >> 1) + d->min;
+
 }
+
+/*********************volt_zeroDetector****************************
+Description: Detects changes between being above the mid point and below to then assign zero crossing time intervals.
+ */
+
+void volt_zeroDetector(struct Voltage *d)
+{
+    int i, j = 0, state = 0, state_last = 0, diff1, diff2;
+
+
+        for (i = 1; i < Num_of_Results; i++)
+        {                                                   // the first point always seems bad
+            if (buffer0[i] > d->mid)       state = 1;    // set state = 1, positive - above mid point
+            else if (buffer0[i] < d->mid)  state = -1;   // set state = -1, negative - below mid point
+            else if (buffer0[i] == d->mid)  state = 0;   // set state = 0, when equal - at mid point
+            if (i > 1)
+            {
+                if (state == 0)                 d->zero_tm[j++] = i;
+                else if (state_last != state)   d->zero_tm[j++] = i;    // look for state transitions, but don't know if prior point was closer
+            }
+            state_last = state;
+            if (j == 3) break;
+        }
+        for (j = 0; j < 3; j++)
+        {
+            if (buffer0[d->zero_tm[j]-1] > d->mid)   diff1 = buffer0[d->zero_tm[j]-1] - d->mid;
+            else                                        diff1 = d->mid - buffer0[d->zero_tm[j-1]];
+            if (buffer0[d->zero_tm[j]] > d->mid)     diff2 = buffer0[d->zero_tm[j]] - d->mid;
+            else                                        diff2 = d->mid - buffer0[d->zero_tm[j]];
+            if (diff1 < diff2)  d->zero_tm[j] -= 1;
+        }
+}
+
+long period(struct Voltage d)
+{
+    long period = 0;
+
+    period = d.zero_tm[2] - d.zero_tm[0];
+
+    //detecting bad results
+    if (period >= 900)
+    {
+        return period;
+    }
+    else
+    {
+        period = 0;
+        return period;
+    }
+}
+
+
+
+
+
 /************************************   Assign ******************************
 Description: Assign takes the parsed commands and changes the operation of
              the instrument.
